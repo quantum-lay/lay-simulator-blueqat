@@ -1,15 +1,14 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic;
 use lay::Layer;
 use lay::gates::{CliffordGate, TGate};
 use cpython::{Python, PyResult};
-use futures::executor::{block_on, ThreadPool};
+use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 
 pub struct BlueqatSimulator {
     sendbuf: Vec<Op>,
-    fut: Option<Pin<Box<dyn Future<Output=()>>>>,
-    pool: ThreadPool,
+    rt: Runtime,
+    fut: Option<JoinHandle<()>>,
 }
 
 enum Op {
@@ -31,37 +30,11 @@ impl BlueqatSimulator {
         if USED.swap(true, atomic::Ordering::SeqCst) {
             return Err(());
         }
+        let rt = Runtime::new().unwrap();
+        let fut = Some(rt.spawn(async {}));
         // This error handling is too crude.
         Self::import_blueqat().map_err(|_| ())?;
-        Ok(Self { sendbuf: vec![], fut: None, pool: ThreadPool::new().unwrap() })
-    }
-    async fn send_internal(fut: Option<Pin<Box<dyn Future<Output=()>>>>, ops: Vec<Op>) {
-        match fut {
-            Some(fut) => fut.await,
-            None => ()
-        };
-        let mut script = vec![];
-        for op in ops {
-            match op {
-                Op::Initialize => {
-                    script.push("c = Circuit()".to_owned());
-                },
-                Op::Unary(g, q) => {
-                    script.push(format!("c.{}[{}]", g, q));
-                },
-                Op::Binary(g, c, t) => {
-                    script.push(format!("c.{}[{}, {}]", g, c, t));
-                },
-            }
-        }
-        Python::acquire_gil().python().run(&script.join("\n"), None, None).unwrap();
-    }
-    fn receive_internal(fut: Option<Pin<Box<dyn Future<Output=()>>>>) -> String {
-        match fut {
-            Some(fut) => block_on(fut),
-            None => ()
-        };
-        Python::acquire_gil().python().eval("c.run(shots=1).most_common()[0][0]", None, None).unwrap().to_string()
+        Ok(Self { sendbuf: vec![], rt, fut })
     }
 }
 
@@ -80,17 +53,38 @@ impl Layer for BlueqatSimulator {
     }
     // send method should return Result type. (but, async...?)
     fn send(&mut self) {
-        let mut v = vec![];
-        std::mem::swap(&mut v, &mut self.sendbuf);
-        let f = self.fut.take();
-        self.fut = Some(Box::pin(Self::send_internal(f, v)));
+        let mut ops = vec![];
+        std::mem::swap(&mut ops, &mut self.sendbuf);
+        let fut = self.fut.take().unwrap();
+        self.fut = Some(self.rt.spawn(async {
+            // Unwrapping!
+            fut.await.unwrap();
+            let mut script = vec![];
+            for op in ops {
+                match op {
+                    Op::Initialize => {
+                        script.push("c = Circuit()".to_owned());
+                    },
+                    Op::Unary(g, q) => {
+                        script.push(format!("c.{}[{}]", g, q));
+                    },
+                    Op::Binary(g, c, t) => {
+                        script.push(format!("c.{}[{}, {}]", g, c, t));
+                    },
+                }
+            }
+            Python::acquire_gil().python().run(&script.join("\n"), None, None).unwrap();
+        }));
     }
     fn measure(&mut self, q: Self::Qubit, _: ()) {
         self.sendbuf.push(Op::Unary("m", q));
     }
     fn receive(&mut self) -> String {
-        let f = self.fut.take();
-        Self::receive_internal(f)
+        let fut = self.fut.take().unwrap();
+        self.fut = Some(self.rt.spawn(async {}));
+        // Unwrapping!
+        self.rt.block_on(fut).unwrap();
+        Python::acquire_gil().python().eval("c.run(shots=1).most_common()[0][0]", None, None).unwrap().to_string()
     }
 }
 
