@@ -6,22 +6,16 @@ use cpython::{Python, PyResult};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
-enum Op {
-    Initialize,
-    Unary(&'static str, u8),
-    Binary(&'static str, u8, u8),
-}
-
 pub struct BlueqatSimulator {
 }
 
 pub struct BlueqatOperations {
-    ops: Vec<Op>,
+    insts: Vec<String>,
 }
 
 impl BlueqatOperations {
     pub fn new() -> Self {
-        Self { ops: vec![] }
+        Self { insts: vec![] }
     }
 }
 
@@ -43,33 +37,30 @@ impl BlueqatSimulator {
         Ok(Self { })
     }
     // send method should return Result type. (but, async...?)
-    pub fn send(self, ops: BlueqatOperations) -> impl Future<Output=Self> {
-        async {
-            let mut script = vec![];
-            for op in ops.ops {
-                match op {
-                    Op::Initialize => {
-                        script.push("c = Circuit()".to_owned());
-                    },
-                    Op::Unary(g, q) => {
-                        script.push(format!("c.{}[{}]", g, q));
-                    },
-                    Op::Binary(g, c, t) => {
-                        script.push(format!("c.{}[{}, {}]", g, c, t));
-                    },
-                }
-            }
-            Python::acquire_gil().python().run(&script.join("\n"), None, None).unwrap();
-            self
+    pub fn send(&mut self, ops: &BlueqatOperations) -> impl Future<Output=()> {
+        let script = ops.insts.join("\n");
+        async move {
+            Python::acquire_gil().python().run(&script, None, None).unwrap();
         }
     }
-    pub fn receive(self) -> impl Future<Output=(Self, String)> {
-        async {
+    pub fn receive<'a>(&mut self, result: &'a mut String) -> impl Future<Output=()> + 'a {
+        async move {
             let s = Python::acquire_gil().python()
                                          .eval("c.run(shots=1).most_common()[0][0]", None, None)
                                          .unwrap()
                                          .to_string();
-            (self, s)
+            result.push_str(&s);
+        }
+    }
+    pub fn send_receive<'a>(&mut self, ops: &BlueqatOperations, result: &'a mut String) -> impl Future<Output=()> + 'a {
+        let script = ops.insts.join("\n");
+        async move {
+            Python::acquire_gil().python().run(&script, None, None).unwrap();
+            let s = Python::acquire_gil().python()
+                                         .eval("c.run(shots=1).most_common()[0][0]", None, None)
+                                         .unwrap()
+                                         .to_string();
+            result.push_str(&s);
         }
     }
 }
@@ -84,43 +75,43 @@ impl Operations for BlueqatOperations {
     type Qubit = u8;
     type Slot = ();
     fn initialize(&mut self) {
-        self.ops.push(Op::Initialize);
+        self.insts.push("c = Circuit()".to_owned());
     }
     fn measure(&mut self, q: Self::Qubit, _: ()) {
-        self.ops.push(Op::Unary("m", q));
+        self.insts.push(format!("c.m[{}]", q));
     }
 }
 
 impl CliffordGate for BlueqatOperations {
     fn x(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("x", q));
+        self.insts.push(format!("c.x[{}]", q));
     }
     fn y(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("y", q));
+        self.insts.push(format!("c.y[{}]", q));
     }
     fn z(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("z", q));
+        self.insts.push(format!("c.z[{}]", q));
     }
     fn h(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("h", q));
+        self.insts.push(format!("c.h[{}]", q));
     }
     fn s(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("s", q));
+        self.insts.push(format!("c.s[{}]", q));
     }
     fn sdg(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("sdg", q));
+        self.insts.push(format!("c.sdg[{}]", q));
     }
     fn cx(&mut self, c: Self::Qubit, t: Self::Qubit) {
-        self.ops.push(Op::Binary("cx", c, t));
+        self.insts.push(format!("c.cx[{}, {}]", c, t));
     }
 }
 
 impl TGate for BlueqatOperations {
     fn t(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("t", q));
+        self.insts.push(format!("c.t[{}]", q));
     }
     fn tdg(&mut self, q: Self::Qubit) {
-        self.ops.push(Op::Unary("tdg", q));
+        self.insts.push(format!("c.tdg[{}]", q));
     }
 }
 
