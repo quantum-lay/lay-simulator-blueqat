@@ -1,20 +1,22 @@
+use std::future::Future;
 use std::sync::atomic;
-use lay::Layer;
+use lay::Operations;
 use lay::gates::{CliffordGate, TGate};
 use cpython::{Python, PyResult};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
 pub struct BlueqatSimulator {
-    sendbuf: Vec<Op>,
-    rt: Runtime,
-    fut: Option<JoinHandle<()>>,
 }
 
-enum Op {
-    Initialize,
-    Unary(&'static str, u8),
-    Binary(&'static str, u8, u8),
+pub struct BlueqatOperations {
+    insts: Vec<String>,
+}
+
+impl BlueqatOperations {
+    pub fn new() -> Self {
+        Self { insts: vec![] }
+    }
 }
 
 // BlueqatSimulator is a singleton.
@@ -30,11 +32,36 @@ impl BlueqatSimulator {
         if USED.swap(true, atomic::Ordering::SeqCst) {
             return Err(());
         }
-        let rt = Runtime::new().unwrap();
-        let fut = Some(rt.spawn(async {}));
         // This error handling is too crude.
         Self::import_blueqat().map_err(|_| ())?;
-        Ok(Self { sendbuf: vec![], rt, fut })
+        Ok(Self { })
+    }
+    // send method should return Result type. (but, async...?)
+    pub fn send(&mut self, ops: &BlueqatOperations) -> impl Future<Output=()> {
+        let script = ops.insts.join("\n");
+        async move {
+            Python::acquire_gil().python().run(&script, None, None).unwrap();
+        }
+    }
+    pub fn receive<'a>(&mut self, result: &'a mut String) -> impl Future<Output=()> + 'a {
+        async move {
+            let s = Python::acquire_gil().python()
+                                         .eval("c.run(shots=1).most_common()[0][0]", None, None)
+                                         .unwrap()
+                                         .to_string();
+            result.push_str(&s);
+        }
+    }
+    pub fn send_receive<'a>(&mut self, ops: &BlueqatOperations, result: &'a mut String) -> impl Future<Output=()> + 'a {
+        let script = ops.insts.join("\n");
+        async move {
+            Python::acquire_gil().python().run(&script, None, None).unwrap();
+            let s = Python::acquire_gil().python()
+                                         .eval("c.run(shots=1).most_common()[0][0]", None, None)
+                                         .unwrap()
+                                         .to_string();
+            result.push_str(&s);
+        }
     }
 }
 
@@ -44,80 +71,47 @@ impl Drop for BlueqatSimulator {
     }
 }
 
-impl Layer for BlueqatSimulator {
+impl Operations for BlueqatOperations {
     type Qubit = u8;
     type Slot = ();
-    type Receive = String;
     fn initialize(&mut self) {
-        self.sendbuf.push(Op::Initialize);
-    }
-    // send method should return Result type. (but, async...?)
-    fn send(&mut self) {
-        let mut ops = vec![];
-        std::mem::swap(&mut ops, &mut self.sendbuf);
-        let fut = self.fut.take().unwrap();
-        self.fut = Some(self.rt.spawn(async {
-            // Unwrapping!
-            fut.await.unwrap();
-            let mut script = vec![];
-            for op in ops {
-                match op {
-                    Op::Initialize => {
-                        script.push("c = Circuit()".to_owned());
-                    },
-                    Op::Unary(g, q) => {
-                        script.push(format!("c.{}[{}]", g, q));
-                    },
-                    Op::Binary(g, c, t) => {
-                        script.push(format!("c.{}[{}, {}]", g, c, t));
-                    },
-                }
-            }
-            Python::acquire_gil().python().run(&script.join("\n"), None, None).unwrap();
-        }));
+        self.insts.push("c = Circuit()".to_owned());
     }
     fn measure(&mut self, q: Self::Qubit, _: ()) {
-        self.sendbuf.push(Op::Unary("m", q));
-    }
-    fn receive(&mut self) -> String {
-        let fut = self.fut.take().unwrap();
-        self.fut = Some(self.rt.spawn(async {}));
-        // Unwrapping!
-        self.rt.block_on(fut).unwrap();
-        Python::acquire_gil().python().eval("c.run(shots=1).most_common()[0][0]", None, None).unwrap().to_string()
+        self.insts.push(format!("c.m[{}]", q));
     }
 }
 
-impl CliffordGate for BlueqatSimulator {
+impl CliffordGate for BlueqatOperations {
     fn x(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("x", q));
+        self.insts.push(format!("c.x[{}]", q));
     }
     fn y(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("y", q));
+        self.insts.push(format!("c.y[{}]", q));
     }
     fn z(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("z", q));
+        self.insts.push(format!("c.z[{}]", q));
     }
     fn h(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("h", q));
+        self.insts.push(format!("c.h[{}]", q));
     }
     fn s(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("s", q));
+        self.insts.push(format!("c.s[{}]", q));
     }
     fn sdg(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("sdg", q));
+        self.insts.push(format!("c.sdg[{}]", q));
     }
     fn cx(&mut self, c: Self::Qubit, t: Self::Qubit) {
-        self.sendbuf.push(Op::Binary("cx", c, t));
+        self.insts.push(format!("c.cx[{}, {}]", c, t));
     }
 }
 
-impl TGate for BlueqatSimulator {
+impl TGate for BlueqatOperations {
     fn t(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("t", q));
+        self.insts.push(format!("c.t[{}]", q));
     }
     fn tdg(&mut self, q: Self::Qubit) {
-        self.sendbuf.push(Op::Unary("tdg", q));
+        self.insts.push(format!("c.tdg[{}]", q));
     }
 }
 
