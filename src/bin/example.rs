@@ -1,37 +1,46 @@
 use lay::Layer;
+use lay::Operations;
 use lay::gates::CliffordGate;
-use lay_simulator_blueqat::BlueqatSimulator;
+use lay_simulator_blueqat::{BlueqatSimulator, BlueqatOperations};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let m = 10;
     let mut sim = BlueqatSimulator::new().unwrap();
-    sim.initialize();
+    let mut ops = BlueqatOperations::new();
+    ops.initialize();
     for i in 0..m {
-        sim.h(i * 2);
-        sim.cx(i * 2, i * 2 + 1);
+        ops.h(i * 2);
+        ops.cx(i * 2, i * 2 + 1);
     }
     for i in 0..m * 2 {
-        sim.measure(i, ());
+        ops.measure(i, ());
     }
-    sim.send();
-    println!("Sent!");
-    println!("{}", sim.receive());
+    let sim = tokio::spawn(async {
+        let sim = sim.send(ops).await;
+        println!("Sent!");
+        let (sim, result) = sim.receive().await;
+        println!("{}", result);
+        sim });
+    let mut ops = BlueqatOperations::new();
     for i in 0..m * 2 {
-        sim.x(i);
-        sim.x(i);
-        sim.x(i);
-        sim.measure(i, ());
+        ops.x(i);
+        ops.x(i);
+        ops.x(i);
+        ops.measure(i, ());
     }
-    sim.send();
+    let sim = sim.await.unwrap().send(ops).await;
     println!("Sent!");
-    println!("{}", sim.receive());
+    let (sim, result) = sim.receive().await;
+    println!("{}", result);
+    let mut ops = BlueqatOperations::new();
     for i in 0..m * 2 {
-        sim.x(i);
-        sim.x(i);
-        sim.x(i);
-        sim.measure(i, ());
+        ops.x(i);
+        ops.x(i);
+        ops.x(i);
+        ops.measure(i, ());
     }
-    sim.send();
+    let sim = sim.send(ops).await;
     println!("Sent!");
-    println!("{}", sim.receive());
+    println!("{}", sim.receive().await.1);
 }
