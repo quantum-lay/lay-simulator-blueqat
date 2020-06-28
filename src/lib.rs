@@ -3,8 +3,6 @@ use std::sync::atomic;
 use lay::Operations;
 use lay::gates::{CliffordGate, TGate};
 use cpython::{Python, PyResult};
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
 
 pub struct BlueqatSimulator {
 }
@@ -36,7 +34,6 @@ impl BlueqatSimulator {
         Self::import_blueqat().map_err(|_| ())?;
         Ok(Self { })
     }
-    // send method should return Result type. (but, async...?)
     pub fn send(&mut self, ops: &BlueqatOperations) -> impl Future<Output=()> {
         let script = ops.insts.join("\n");
         async move {
