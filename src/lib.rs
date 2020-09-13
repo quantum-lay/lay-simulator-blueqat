@@ -15,6 +15,10 @@ impl BlueqatOperations {
     pub fn new() -> Self {
         Self { insts: vec![] }
     }
+
+    pub fn raw_pyscript(&mut self, s: String) {
+        self.insts.push(s);
+    }
 }
 
 // BlueqatSimulator is a singleton.
@@ -114,8 +118,33 @@ impl TGate for BlueqatOperations {
 
 #[cfg(test)]
 mod tests {
+    use crate::BlueqatSimulator;
+    use crate::BlueqatOperations;
+    use lay::Operations;
+    use lay::gates::CliffordGate;
+    use tokio::runtime::Runtime;
+    use tokio::prelude::*;
+
     #[test]
     fn it_works() {
         assert_eq!(2 + 2, 4);
+    }
+
+    #[test]
+    fn python_raw() {
+        let mut rt = Runtime::new().unwrap();
+        let mut sim = BlueqatSimulator::new().unwrap();
+        let mut ops = BlueqatOperations::new();
+        let mut s = String::new();
+
+        ops.initialize();
+        ops.raw_pyscript("import numpy as np".to_owned());
+        ops.raw_pyscript("print(np.eye(2))".to_owned());
+        ops.raw_pyscript("if True: c.x[0]".to_owned());
+        ops.raw_pyscript("if False: c.x[1]".to_owned());
+        ops.measure(0, ());
+        ops.measure(1, ());
+        rt.block_on(sim.send_receive(&ops, &mut s));
+        assert_eq!(&s, "10");
     }
 }
