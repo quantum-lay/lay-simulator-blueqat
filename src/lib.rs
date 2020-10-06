@@ -57,6 +57,7 @@ impl BlueqatSimulator {
         let script = ops.insts.join("\n");
         async move {
             Python::acquire_gil().python().run(&script, None, None).unwrap();
+            //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
             let s = Python::acquire_gil().python()
                                          .eval("c.run(shots=1).most_common()[0][0]", None, None)
                                          .unwrap()
