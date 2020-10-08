@@ -89,12 +89,12 @@ impl SteaneLayer {
             }
             if measured & 7 > 0 {
                 let err_x = ERR_TABLE_X[(measured & 7) as usize] + (i as u32) * (PHISQUBIT_PER_LOGQUBIT as u32);
-                eprintln!("* X Err on {}", err_x);
+                eprintln!("* Z Err on {}", err_x);
                 self.ops.z(err_x as Qubit);
             }
             if (measured >> 3) > 0 {
                 let err_z = ERR_TABLE_Z[(measured >> 3) as usize] + (i as u32) * (PHISQUBIT_PER_LOGQUBIT as u32);
-                eprintln!("* Z Err on {}", err_z);
+                eprintln!("* X Err on {}", err_z);
                 self.ops.x(err_z as Qubit);
             }
             self.rt.block_on(self.sim.send(&self.ops));
