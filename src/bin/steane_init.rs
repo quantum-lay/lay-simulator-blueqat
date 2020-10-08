@@ -32,7 +32,7 @@ impl SteaneLayer {
     }
 
     fn measure_ancilla(&self) -> Qubit {
-        self.n_physical_qubits - 6
+        self.n_physical_qubits - MEASURE_ANCILLA_QUBITS
     }
 
     fn syndrome_measure_and_recover(&mut self) {
@@ -90,12 +90,12 @@ impl SteaneLayer {
             if measured & 7 > 0 {
                 let err_x = ERR_TABLE_X[(measured & 7) as usize] + (i as u32) * (PHISQUBIT_PER_LOGQUBIT as u32);
                 eprintln!("* X Err on {}", err_x);
-                self.ops.x(err_x as Qubit);
+                self.ops.z(err_x as Qubit);
             }
             if (measured >> 3) > 0 {
                 let err_z = ERR_TABLE_Z[(measured >> 3) as usize] + (i as u32) * (PHISQUBIT_PER_LOGQUBIT as u32);
                 eprintln!("* Z Err on {}", err_z);
-                self.ops.z(err_z as Qubit);
+                self.ops.x(err_z as Qubit);
             }
             self.rt.block_on(self.sim.send(&self.ops));
             self.ops = BlueqatOperations::new();
