@@ -98,14 +98,14 @@ impl Layer for BlueqatSimulator {
         Ok(())
     }
 
-    fn receive(&mut self, result: &mut Self::Buffer) -> Self::Response {
+    fn receive(&mut self, _: &mut Self::Buffer) -> Self::Response {
         let s = Python::acquire_gil().python()
                                      .eval("c.run(shots=1).most_common()[0][0]", None, None)?
                                      .to_string();
         Ok(s)
     }
 
-    fn send_receive(&mut self, ops: &[Operation<Self>], result: &mut Self::Buffer) -> Self::Response {
+    fn send_receive(&mut self, ops: &[Operation<Self>], _: &mut Self::Buffer) -> Self::Response {
         let script = Self::ops_to_script(ops);
         Python::acquire_gil().python().run(&script, None, None)?;
         //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
