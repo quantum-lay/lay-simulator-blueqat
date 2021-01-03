@@ -1,11 +1,24 @@
 use std::sync::atomic;
-use lay::Layer;
+use lay::{Layer, Operation, OpsVec, operations::opid};
 use lay::gates::{PauliGate, CXGate, HGate, SGate, TGate};
 use cpython::{Python, PyResult};
 
-pub struct BlueqatSimulator {
-    insts: Vec<String>,
+pub fn raw_pyscript(s: String) -> Operation<BlueqatSimulator> {
+    Operation::Var(opid::USERDEF, Box::new(s))
 }
+
+pub trait RawScriptGate {
+    fn raw_pyscript(&mut self, s: String);
+}
+
+impl RawScriptGate for OpsVec<BlueqatSimulator> {
+    fn raw_pyscript(&mut self, s: String) {
+        self.as_mut_vec().push(raw_pyscript(s));
+    }
+}
+
+#[derive(Debug)]
+pub struct BlueqatSimulator {}
 
 // BlueqatSimulator is a singleton.
 // ... If I make circuit as local scope or make unique id as variable name,
@@ -23,11 +36,40 @@ impl BlueqatSimulator {
         }
         // This error handling is too crude.
         Self::import_blueqat().map_err(|_| ())?;
-        Ok(Self { insts: vec![] })
+        Ok(Self {})
     }
 
-    pub fn raw_pyscript(&mut self, s: String) {
-        self.insts.push(s);
+    #[inline]
+    fn op_to_script(op: &Operation<BlueqatSimulator>) -> String {
+        match op {
+            Operation::Empty(id) if *id == opid::INIT =>
+                "c = Circuit()".to_owned(),
+            Operation::QS(id, q, _) if *id == opid::MEAS =>
+                format!("c.m[{}]", q),
+            Operation::QQ(id, c, t) if *id == opid::CX =>
+                format!("c.cx[{}, {}]", c, t),
+            Operation::Q(id, q) if *id == opid::X =>
+                format!("c.x[{}]", q),
+            Operation::Q(id, q) if *id == opid::Y =>
+                format!("c.y[{}]", q),
+            Operation::Q(id, q) if *id == opid::Z =>
+                format!("c.z[{}]", q),
+            Operation::Q(id, q) if *id == opid::H =>
+                format!("c.h[{}]", q),
+            Operation::Q(id, q) if *id == opid::S =>
+                format!("c.s[{}]", q),
+            Operation::Q(id, q) if *id == opid::SDG =>
+                format!("c.sdg[{}]", q),
+            Operation::Q(id, q) if *id == opid::T =>
+                format!("c.t[{}]", q),
+            Operation::Q(id, q) if *id == opid::TDG =>
+                format!("c.tdg[{}]", q),
+            _ => unimplemented!("Unknown op {:?}", op)
+        }
+    }
+
+    fn ops_to_script(ops: &[Operation<BlueqatSimulator>]) -> String {
+        ops.iter().map(Self::op_to_script).collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -37,97 +79,47 @@ impl Drop for BlueqatSimulator {
     }
 }
 
+impl PauliGate for BlueqatSimulator {}
+impl HGate for BlueqatSimulator {}
+impl SGate for BlueqatSimulator {}
+impl TGate for BlueqatSimulator {}
+impl CXGate for BlueqatSimulator {}
+
 impl Layer for BlueqatSimulator {
     type Qubit = u32;
     type Slot = ();
-    type Buffer = String;
-    type Requested = ();
-    type Response = ();
-    type ReqRes = ();
+    type Buffer = ();
+    type Requested = PyResult<()>;
+    type Response = PyResult<String>;
 
-    fn initialize(&mut self) {
-        self.insts.push("c = Circuit()".to_owned());
-    }
-
-    fn measure(&mut self, q: Self::Qubit, _: ()) {
-        self.insts.push(format!("c.m[{}]", q));
-    }
-
-    fn send(&mut self) -> Self::Requested {
-        let script = self.insts.join("\n");
-        Python::acquire_gil().python().run(&script, None, None).unwrap();
+    fn send(&mut self, ops: &[Operation<Self>]) -> Self::Requested {
+        let script = Self::ops_to_script(ops);
+        Python::acquire_gil().python().run(&script, None, None)?;
+        Ok(())
     }
 
     fn receive(&mut self, result: &mut Self::Buffer) -> Self::Response {
         let s = Python::acquire_gil().python()
-                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)
-                                     .unwrap()
+                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)?
                                      .to_string();
-        result.push_str(&s);
+        Ok(s)
     }
 
-    fn send_receive(&mut self, result: &mut Self::Buffer) -> Self::ReqRes {
-        let script = self.insts.join("\n");
-        Python::acquire_gil().python().run(&script, None, None).unwrap();
+    fn send_receive(&mut self, ops: &[Operation<Self>], result: &mut Self::Buffer) -> Self::Response {
+        let script = Self::ops_to_script(ops);
+        Python::acquire_gil().python().run(&script, None, None)?;
         //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
         let s = Python::acquire_gil().python()
-                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)
-                                     .unwrap()
+                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)?
                                      .to_string();
-        result.push_str(&s);
-    }
-}
-
-impl PauliGate for BlueqatSimulator {
-    fn x(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.x[{}]", q));
-    }
-
-    fn y(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.y[{}]", q));
-    }
-
-    fn z(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.z[{}]", q));
-    }
-}
-
-impl HGate for BlueqatSimulator {
-    fn h(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.h[{}]", q));
-    }
-}
-
-impl SGate for BlueqatSimulator {
-    fn s(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.s[{}]", q));
-    }
-
-    fn sdg(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.sdg[{}]", q));
-    }
-}
-
-impl TGate for BlueqatSimulator {
-    fn t(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.t[{}]", q));
-    }
-
-    fn tdg(&mut self, q: Self::Qubit) {
-        self.insts.push(format!("c.tdg[{}]", q));
-    }
-}
-
-impl CXGate for BlueqatSimulator {
-    fn cx(&mut self, c: Self::Qubit, t: Self::Qubit) {
-        self.insts.push(format!("c.cx[{}, {}]", c, t));
+        Ok(s)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::BlueqatSimulator;
-    use lay::Layer;
+    use crate::{BlueqatSimulator, RawScriptGate};
+    use lay::{Layer, OpsVec};
 
     #[test]
     fn it_works() {
@@ -137,16 +129,16 @@ mod tests {
     #[test]
     fn python_raw() {
         let mut sim = BlueqatSimulator::new().unwrap();
-        let mut s = String::new();
+        let mut ops = OpsVec::new();
 
-        sim.initialize();
-        sim.raw_pyscript("import numpy as np".to_owned());
-        sim.raw_pyscript("print(np.eye(2))".to_owned());
-        sim.raw_pyscript("if True: c.x[0]".to_owned());
-        sim.raw_pyscript("if False: c.x[1]".to_owned());
-        sim.measure(0, ());
-        sim.measure(1, ());
-        sim.send_receive(&mut s);
-        assert_eq!(&s, "10");
+        ops.initialize();
+        ops.raw_pyscript("import numpy as np".to_owned());
+        ops.raw_pyscript("print(np.eye(2))".to_owned());
+        ops.raw_pyscript("if True: c.x[0]".to_owned());
+        ops.raw_pyscript("if False: c.x[1]".to_owned());
+        ops.measure(0, ());
+        ops.measure(1, ());
+        let s = sim.send_receive(ops.as_ref(), &mut ()).unwrap();
+        assert_eq!(s, "10");
     }
 }
