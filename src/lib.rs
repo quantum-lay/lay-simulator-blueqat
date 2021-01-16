@@ -1,10 +1,10 @@
 use std::sync::atomic;
-use lay::{Layer, Operation, Measured, OpsVec, operations::opid};
+use lay::{Layer, Measured, OpsVec, operations::{opid, OpArgs}};
 use lay::gates::{PauliGate, CXGate, HGate, SGate, TGate};
 use cpython::{Python, PyResult};
 
-pub fn raw_pyscript(s: String) -> Operation<BlueqatSimulator> {
-    Operation::Var(opid::USERDEF, Box::new(s))
+pub fn raw_pyscript(s: String) -> OpArgs<BlueqatSimulator> {
+    OpArgs::Var(opid::USERDEF, Box::new(s))
 }
 
 pub trait RawScriptGate {
@@ -61,40 +61,40 @@ impl BlueqatSimulator {
     }
 
     #[inline]
-    fn op_to_script(op: &Operation<BlueqatSimulator>) -> String {
+    fn op_to_script(op: &OpArgs<BlueqatSimulator>) -> String {
         match op {
-            Operation::Empty(id) if *id == opid::INIT =>
+            OpArgs::Empty(id) if *id == opid::INIT =>
                 "c = Circuit()".to_owned(),
-            Operation::QS(id, q, s) if *id == opid::MEAS => {
+            OpArgs::QS(id, q, s) if *id == opid::MEAS => {
                 assert_eq!(q, s, "Qubit and slot must be same in this simulator.");
                 format!("c.m[{}]", q)
             }
-            Operation::QQ(id, c, t) if *id == opid::CX =>
+            OpArgs::QQ(id, c, t) if *id == opid::CX =>
                 format!("c.cx[{}, {}]", c, t),
-            Operation::Q(id, q) if *id == opid::X =>
+            OpArgs::Q(id, q) if *id == opid::X =>
                 format!("c.x[{}]", q),
-            Operation::Q(id, q) if *id == opid::Y =>
+            OpArgs::Q(id, q) if *id == opid::Y =>
                 format!("c.y[{}]", q),
-            Operation::Q(id, q) if *id == opid::Z =>
+            OpArgs::Q(id, q) if *id == opid::Z =>
                 format!("c.z[{}]", q),
-            Operation::Q(id, q) if *id == opid::H =>
+            OpArgs::Q(id, q) if *id == opid::H =>
                 format!("c.h[{}]", q),
-            Operation::Q(id, q) if *id == opid::S =>
+            OpArgs::Q(id, q) if *id == opid::S =>
                 format!("c.s[{}]", q),
-            Operation::Q(id, q) if *id == opid::SDG =>
+            OpArgs::Q(id, q) if *id == opid::SDG =>
                 format!("c.sdg[{}]", q),
-            Operation::Q(id, q) if *id == opid::T =>
+            OpArgs::Q(id, q) if *id == opid::T =>
                 format!("c.t[{}]", q),
-            Operation::Q(id, q) if *id == opid::TDG =>
+            OpArgs::Q(id, q) if *id == opid::TDG =>
                 format!("c.tdg[{}]", q),
-            Operation::Var(id, cmd) if *id == opid::USERDEF => {
+            OpArgs::Var(id, cmd) if *id == opid::USERDEF => {
                 cmd.downcast_ref::<String>().unwrap().clone()
             }
             _ => unimplemented!("Unknown op {:?}", op)
         }
     }
 
-    fn ops_to_script(ops: &[Operation<BlueqatSimulator>]) -> String {
+    fn ops_to_script(ops: &[OpArgs<BlueqatSimulator>]) -> String {
         ops.iter().map(Self::op_to_script).collect::<Vec<_>>().join("\n")
     }
 }
@@ -112,13 +112,14 @@ impl TGate for BlueqatSimulator {}
 impl CXGate for BlueqatSimulator {}
 
 impl Layer for BlueqatSimulator {
+    type Operation = OpArgs<Self>;
     type Qubit = u32;
     type Slot = u32;
     type Buffer = BlueqatMeasured;
     type Requested = PyResult<()>;
     type Response = PyResult<()>;
 
-    fn send(&mut self, ops: &[Operation<Self>]) -> Self::Requested {
+    fn send(&mut self, ops: &[OpArgs<Self>]) -> Self::Requested {
         let script = Self::ops_to_script(ops);
         Python::acquire_gil().python().run(&script, None, None)?;
         Ok(())
@@ -132,7 +133,7 @@ impl Layer for BlueqatSimulator {
         Ok(())
     }
 
-    fn send_receive(&mut self, ops: &[Operation<Self>], buf: &mut Self::Buffer) -> Self::Response {
+    fn send_receive(&mut self, ops: &[OpArgs<Self>], buf: &mut Self::Buffer) -> Self::Response {
         let script = Self::ops_to_script(ops);
         Python::acquire_gil().python().run(&script, None, None)?;
         //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
