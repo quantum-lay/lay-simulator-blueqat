@@ -23,6 +23,16 @@ pub struct BlueqatSimulator {}
 #[derive(Debug)]
 pub struct BlueqatMeasured(pub String);
 
+impl BlueqatMeasured {
+    pub fn new() -> BlueqatMeasured {
+        Self(String::new())
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 impl Measured for BlueqatMeasured {
     type Slot = u32;
     fn get(&self, n: u32) -> bool {
@@ -104,9 +114,9 @@ impl CXGate for BlueqatSimulator {}
 impl Layer for BlueqatSimulator {
     type Qubit = u32;
     type Slot = u32;
-    type Buffer = ();
+    type Buffer = BlueqatMeasured;
     type Requested = PyResult<()>;
-    type Response = PyResult<BlueqatMeasured>;
+    type Response = PyResult<()>;
 
     fn send(&mut self, ops: &[Operation<Self>]) -> Self::Requested {
         let script = Self::ops_to_script(ops);
@@ -114,28 +124,30 @@ impl Layer for BlueqatSimulator {
         Ok(())
     }
 
-    fn receive(&mut self, _: &mut Self::Buffer) -> Self::Response {
-        let s = Python::acquire_gil().python()
-                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)?
-                                     .to_string();
-        Ok(BlueqatMeasured(s))
+    fn receive(&mut self, buf: &mut Self::Buffer) -> Self::Response {
+        let mut s = Python::acquire_gil().python()
+                                         .eval("c.run(shots=1).most_common()[0][0]", None, None)?
+                                         .to_string();
+        std::mem::swap(&mut buf.0, &mut s);
+        Ok(())
     }
 
-    fn send_receive(&mut self, ops: &[Operation<Self>], _: &mut Self::Buffer) -> Self::Response {
+    fn send_receive(&mut self, ops: &[Operation<Self>], buf: &mut Self::Buffer) -> Self::Response {
         let script = Self::ops_to_script(ops);
         Python::acquire_gil().python().run(&script, None, None)?;
         //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
-        let s = Python::acquire_gil().python()
-                                     .eval("c.run(shots=1).most_common()[0][0]", None, None)?
-                                     .to_string();
-        Ok(BlueqatMeasured(s))
+        let mut s = Python::acquire_gil().python()
+                                         .eval("c.run(shots=1).most_common()[0][0]", None, None)?
+                                         .to_string();
+        std::mem::swap(&mut buf.0, &mut s);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlueqatSimulator, RawScriptGate};
-    use lay::{Layer, OpsVec};
+    use crate::{BlueqatSimulator, BlueqatMeasured, RawScriptGate};
+    use lay::{Layer, Measured, OpsVec};
 
     #[test]
     fn it_works() {
@@ -154,7 +166,9 @@ mod tests {
         ops.raw_pyscript("if False: c.x[1]".to_owned());
         ops.measure(0, 0);
         ops.measure(1, 1);
-        let s = sim.send_receive(ops.as_ref(), &mut ()).unwrap();
-        assert_eq!(s.0, "10");
+        let mut measured = BlueqatMeasured::new();
+        sim.send_receive(ops.as_ref(), &mut measured).unwrap();
+        assert_eq!(measured.get(0), true);
+        assert_eq!(measured.get(1), false);
     }
 }
