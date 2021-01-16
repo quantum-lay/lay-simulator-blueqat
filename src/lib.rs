@@ -142,6 +142,10 @@ impl Layer for BlueqatSimulator {
         std::mem::swap(&mut buf.0, &mut s);
         Ok(())
     }
+
+    fn make_buffer(&self) -> Self::Buffer {
+        Self::Buffer::new()
+    }
 }
 
 #[cfg(test)]
