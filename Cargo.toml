@@ -3,6 +3,9 @@ name = "lay-simulator-blueqat"
 version = "0.1.0"
 authors = ["gyu-don <takumi.kt+git@gmail.com>"]
 edition = "2018"
+description = "Blueqat backend for lay"
+license = "Apache-2.0"
+publish = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
