@@ -17,26 +17,26 @@ impl RawScriptGate for OpsVec<BlueqatSimulator> {
     }
 }
 
-#[derive(Debug)]
-pub struct BlueqatSimulator {}
+const UNASSIGNED: u32 = 0xffffffff;
 
 #[derive(Debug)]
-pub struct BlueqatMeasured(pub String);
+pub struct BlueqatSimulator {
+    slot: [u32; 64],
+}
+
+#[derive(Debug)]
+pub struct BlueqatMeasured([bool; 64]);
 
 impl BlueqatMeasured {
     pub fn new() -> BlueqatMeasured {
-        Self(String::new())
-    }
-
-    pub fn clear(&mut self) {
-        self.0.clear();
+        Self([false; 64])
     }
 }
 
 impl Measured for BlueqatMeasured {
     type Slot = u32;
     fn get(&self, n: u32) -> bool {
-        self.0.as_bytes()[n as usize] == b'1'
+        (self.0)[n as usize]
     }
 }
 
@@ -57,7 +57,7 @@ impl BlueqatSimulator {
         }
         // This error handling is too crude.
         Self::import_blueqat().map_err(|_| ())?;
-        Ok(Self {})
+        Ok(Self { slot: [UNASSIGNED; 64] })
     }
 
     #[inline]
@@ -65,8 +65,8 @@ impl BlueqatSimulator {
         match op {
             OpArgs::Empty(id) if *id == opid::INIT =>
                 "c = Circuit()".to_owned(),
-            OpArgs::QS(id, q, s) if *id == opid::MEAS => {
-                assert_eq!(q, s, "Qubit and slot must be same in this simulator.");
+            OpArgs::QS(id, q, _) if *id == opid::MEAS => {
+                //assert_eq!(q, s, "Qubit and slot must be same in this simulator.");
                 format!("c.m[{}]", q)
             }
             OpArgs::QQ(id, c, t) if *id == opid::CX =>
@@ -97,6 +97,29 @@ impl BlueqatSimulator {
     fn ops_to_script(ops: &[OpArgs<BlueqatSimulator>]) -> String {
         ops.iter().map(Self::op_to_script).collect::<Vec<_>>().join("\n")
     }
+
+    fn assign_slot(&mut self, ops: &[OpArgs<BlueqatSimulator>]) {
+        for op in ops {
+            if let OpArgs::QS(id, q, s) = op {
+                if *id != opid::MEAS { continue; }
+                if self.slot[*q as usize] == UNASSIGNED {
+                    self.slot[*q as usize] = *s as u32;
+                } else {
+                    panic!("This simulator cannot measure same qubit without receive former result.");
+                }
+            }
+        }
+    }
+
+    fn write_buf_reset_slot(&mut self, measured: &str, buf: &mut BlueqatMeasured) {
+        let measured = measured.as_bytes();
+        for (q, s) in self.slot.iter_mut().enumerate() {
+            if *s != UNASSIGNED {
+                (buf.0)[*s as usize] = measured[q] == b'1';
+                *s = UNASSIGNED;
+            }
+        }
+    }
 }
 
 impl Drop for BlueqatSimulator {
@@ -121,26 +144,45 @@ impl Layer for BlueqatSimulator {
 
     fn send(&mut self, ops: &[OpArgs<Self>]) -> Self::Requested {
         let script = Self::ops_to_script(ops);
+        self.assign_slot(ops);
+        eprintln!("{}", script);
+        eprintln!("# --- send ---");
         Python::acquire_gil().python().run(&script, None, None)?;
         Ok(())
     }
 
     fn receive(&mut self, buf: &mut Self::Buffer) -> Self::Response {
-        let mut s = Python::acquire_gil().python()
+        let s = Python::acquire_gil().python()
                                          .eval("c.run(shots=1).most_common()[0][0]", None, None)?
                                          .to_string();
-        std::mem::swap(&mut buf.0, &mut s);
+        eprintln!("# --- receive ---");
+        self.write_buf_reset_slot(&s, buf);
+        eprintln!("# raw: {}", s);
+        eprint!("# map: ");
+        for b in 0..s.len() {
+            eprint!("{}", buf.get(b as u32) as u8);
+        }
+        eprintln!();
         Ok(())
     }
 
     fn send_receive(&mut self, ops: &[OpArgs<Self>], buf: &mut Self::Buffer) -> Self::Response {
         let script = Self::ops_to_script(ops);
+        self.assign_slot(ops);
         Python::acquire_gil().python().run(&script, None, None)?;
         //eprintln!("Circuit: {}", Python::acquire_gil().python().eval("c", None, None).unwrap().to_string());
-        let mut s = Python::acquire_gil().python()
+        let s = Python::acquire_gil().python()
                                          .eval("c.run(shots=1).most_common()[0][0]", None, None)?
                                          .to_string();
-        std::mem::swap(&mut buf.0, &mut s);
+        eprintln!("{}", script);
+        eprintln!("# --- send_receive ---");
+        self.write_buf_reset_slot(&s, buf);
+        eprintln!("# raw: {}", s);
+        eprint!("# map: ");
+        for b in 0..s.len() {
+            eprint!("{}", buf.get(b as u32) as u8);
+        }
+        eprintln!();
         Ok(())
     }
 
