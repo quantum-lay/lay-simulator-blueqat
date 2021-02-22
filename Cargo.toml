@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["gyu-don <takumi.kt+git@gmail.com>"]
 edition = "2018"
 description = "Blueqat backend for lay"
+repository = "https://github.com/quantum-lay/lay-simulator-blueqat"
 license = "Apache-2.0"
 publish = true
 
